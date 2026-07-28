@@ -77,11 +77,11 @@ def compute_total_bytes(source: Path, excludes: list[str]) -> int:
 
 
 def format_bytes(n: int) -> str:
-    for unit in ("", "K", "M", "G", "T"):
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if abs(n) < 1024:
-            return f"{n:,.0f}{unit}" if unit == "" else f"{n:.1f}{unit}" if unit == "K" else f"{n:.2f}{unit}"
+            return f"{n:,.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}" if unit == "KiB" else f"{n:.2f}{unit}"
         n /= 1024
-    return f"{n:.2f}P"
+    return f"{n:.2f}PiB"
 
 
 def parse_bytes(s: str) -> int | None:
@@ -149,6 +149,7 @@ def print_banner() -> None:
     print("  Source files are COPIED (not moved). Nothing is deleted.")
     print()
     print("  Keep the terminal window wide to keep progress on one line.")
+    print("  Press 'p' during transfer to pause/resume.")
     print("  Enter blank at any prompt to skip to the next step.")
     print("  Confirm the summary to proceed with the actual copy.")
     print("=" * 70)
@@ -316,38 +317,41 @@ def main() -> int:
                         os.kill(proc.pid, signal.SIGSTOP)
                         paused = True
 
-    def read_stream(stream, is_error: bool) -> int | None:
+    def read_stream(stream, is_error: bool) -> None:
         nonlocal current_file
-        for raw_line in iter(stream.readline, b''):
-            if not raw_line:
-                break
-            line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
-            if is_error:
-                sys.stderr.write(line + "\n")
-                sys.stderr.flush()
-            elif line.startswith("\r"):
-                parts = line.split("\r")
-                last = parts[-1].strip()
-                if last:
-                    now = time.time()
-                    elapsed = now - start_time - paused_time
-                    elapsed_str = f"{int(elapsed//3600):02d}:{int((elapsed%3600)//60):02d}:{int(elapsed%60):02d}"
-                    fields = last.split()
-                    bytes_field = fields[0] if fields else ""
-                    speed_field = fields[2] if len(fields) > 2 else ""
-                    raw_bytes = parse_bytes(bytes_field)
-                    if raw_bytes and raw_bytes > 0 and elapsed > 0:
-                        avg_str = format_bytes(int(raw_bytes / elapsed)) + "/s"
-                    else:
-                        avg_str = ""
-                    m = re.search(r'xfr#(\d+)', last)
-                    xfr = m.group(1) if m else ""
-                    suffix = "  PAUSED" if paused else ""
-                    sys.stderr.write(f"\r{bytes_field:>12} {total_str:>12} {speed_field:>12} {avg_str:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
+        try:
+            for raw_line in iter(stream.readline, b''):
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                if is_error:
+                    sys.stderr.write(line + "\n")
                     sys.stderr.flush()
-            elif line.strip() and not line.startswith("created directory"):
-                current_file = line
-        return None
+                elif line.startswith("\r"):
+                    parts = line.split("\r")
+                    last = parts[-1].strip()
+                    if last:
+                        now = time.time()
+                        elapsed = now - start_time - paused_time
+                        elapsed_str = f"{int(elapsed//3600):02d}:{int((elapsed%3600)//60):02d}:{int(elapsed%60):02d}"
+                        fields = last.split()
+                        bytes_field = fields[0] if fields else ""
+                        speed_field = fields[2] if len(fields) > 2 else ""
+                        raw_bytes = parse_bytes(bytes_field)
+                        if raw_bytes and raw_bytes > 0 and elapsed > 0:
+                            avg_str = format_bytes(int(raw_bytes / elapsed)) + "/s"
+                        else:
+                            avg_str = ""
+                        m = re.search(r'xfr#(\d+)', last)
+                        xfr = m.group(1) if m else ""
+                        suffix = "  PAUSED" if paused else ""
+                        formatted_bytes = format_bytes(raw_bytes) if raw_bytes is not None else bytes_field
+                        sys.stderr.write(f"\r{formatted_bytes:>12} {total_str:>12} {speed_field:>12} {avg_str:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
+                        sys.stderr.flush()
+                elif line.strip() and not line.startswith("created directory"):
+                    current_file = line
+        except (ValueError, OSError):
+            pass
 
     threads = []
     for stream, is_err in [(proc.stdout, False), (proc.stderr, True)]:
@@ -357,8 +361,18 @@ def main() -> int:
     t_pause = threading.Thread(target=pause_listener, daemon=True)
     t_pause.start()
     threads.append(t_pause)
-    for t in threads:
-        t.join()
+    for t in threads[:2]:
+        while t.is_alive():
+            t.join(timeout=1)
+            if proc.poll() is not None:
+                try:
+                    proc.stdout.close()
+                except OSError:
+                    pass
+                try:
+                    proc.stderr.close()
+                except OSError:
+                    pass
     pause_done.set()
     if paused:
         os.kill(proc.pid, signal.SIGCONT)
