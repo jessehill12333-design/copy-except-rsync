@@ -8,6 +8,27 @@ Independent repository for the `copy-except-rsync` workstation tool.
 Copy a directory excluding specified subfolder paths.
 
 
+## Notes
+
+### Progress overwrite and line-wrapping
+
+Same single-line `\r`-based progress display as `copy-except-tar`. Line
+wrapping breaks the overwrite and causes each update to print on a new line —
+keep the terminal window wide.
+
+### Rsync vs tar
+
+Rsync supports incremental sync (only transfers changed files) and can remove
+destination files that no longer exist at the source. It also handles
+permissions, ownership, and timestamps natively via `-a`. The trade-off:
+per-file stat and metadata operations cause seeking on HDDs, making it slower
+than the tar-pipe variant for bulk copies.
+
+### Naming convention
+
+The `-rsync` suffix distinguishes this incremental-sync variant from
+`copy-except-tar` (faster for bulk HDD copies but always re-copies everything).
+
 ## Run
 
 Run `./run.sh`, or use the optional shortcut under `desktop/`.
