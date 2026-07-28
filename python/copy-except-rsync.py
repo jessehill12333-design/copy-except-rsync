@@ -131,6 +131,7 @@ def print_banner() -> None:
     print("  Uses rsync -a with --exclude for each excluded path.")
     print("  Source files are COPIED (not moved). Nothing is deleted.")
     print()
+    print("  Keep the terminal window wide to keep progress on one line.")
     print("  Enter blank at any prompt to skip to the next step.")
     print("  Confirm the summary to proceed with the actual copy.")
     print("=" * 70)
