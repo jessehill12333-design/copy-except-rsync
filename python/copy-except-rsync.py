@@ -84,6 +84,25 @@ def format_bytes(n: int) -> str:
     return f"{n:.2f}P"
 
 
+def parse_bytes(s: str) -> int | None:
+    s = s.replace(",", "").strip()
+    if not s:
+        return None
+    if s[-1].isalpha():
+        unit = s[-1].upper()
+        num = s[:-1].strip()
+        try:
+            n = float(num)
+        except ValueError:
+            return None
+        multipliers = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4, "P": 1024**5}
+        return int(n * multipliers.get(unit, 1))
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
 def build_rsync_command(source: Path, dest: Path, excludes: list[str], dry_run: bool) -> list[str]:
     cmd = ["rsync", "-a"]
     if dry_run:
@@ -254,7 +273,7 @@ def main() -> int:
     pause_start = 0.0
     paused = False
     pause_done = threading.Event()
-    print(f"{'Bytes':>12} {'Total':>12} {'Speed':>12} {'Elapsed':>9}   {'xfr#':>4}   File", file=sys.stderr)
+    print(f"{'Bytes':>12} {'Total':>12} {'Speed':>12} {'Avg':>12} {'Elapsed':>9}   {'xfr#':>4}   File", file=sys.stderr)
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     current_file = ""
@@ -296,10 +315,15 @@ def main() -> int:
                     fields = last.split()
                     bytes_field = fields[0] if fields else ""
                     speed_field = fields[2] if len(fields) > 2 else ""
+                    raw_bytes = parse_bytes(bytes_field)
+                    if raw_bytes and raw_bytes > 0 and elapsed > 0:
+                        avg_str = format_bytes(int(raw_bytes / elapsed)) + "/s"
+                    else:
+                        avg_str = ""
                     m = re.search(r'xfr#(\d+)', last)
                     xfr = m.group(1) if m else ""
                     suffix = "  PAUSED" if paused else ""
-                    sys.stderr.write(f"\r{bytes_field:>12} {total_str:>12} {speed_field:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
+                    sys.stderr.write(f"\r{bytes_field:>12} {total_str:>12} {speed_field:>12} {avg_str:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
                     sys.stderr.flush()
             elif line.strip() and not line.startswith("created directory"):
                 current_file = line
