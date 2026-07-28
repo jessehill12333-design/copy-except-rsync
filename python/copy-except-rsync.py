@@ -328,7 +328,8 @@ def main() -> int:
                     sys.stderr.write(f"\r{bytes_field:>12} {total_str:>12} {speed_field:>12} {avg_str:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
                     sys.stderr.flush()
             elif line.strip() and not line.startswith("created directory"):
-                current_file = line
+                raw = line.lstrip("./")
+                current_file = raw.rsplit("/", 1)[-1] if "/" in raw else raw
         return None
 
     threads = []
