@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import select
+import signal
 import subprocess
 import sys
 import threading
@@ -248,10 +250,32 @@ def main() -> int:
     total_bytes = compute_total_bytes(source, excludes)
     total_str = format_bytes(total_bytes)
     start_time = time.time()
+    paused_time = 0.0
+    pause_start = 0.0
+    paused = False
+    pause_done = threading.Event()
     print(f"{'Bytes':>12} {'Total':>12} {'Speed':>12} {'Elapsed':>9}   {'xfr#':>4}   File", file=sys.stderr)
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     current_file = ""
+
+    def pause_listener() -> None:
+        nonlocal paused, paused_time, pause_start
+        if not sys.stdin.isatty():
+            return
+        while not pause_done.is_set():
+            r, _, _ = select.select([sys.stdin], [], [], 0.3)
+            if r:
+                ch = sys.stdin.read(1)
+                if ch in ('p', 'P'):
+                    if paused:
+                        os.kill(proc.pid, signal.SIGCONT)
+                        paused_time += time.time() - pause_start
+                        paused = False
+                    else:
+                        pause_start = time.time()
+                        os.kill(proc.pid, signal.SIGSTOP)
+                        paused = True
 
     def read_stream(stream, is_error: bool) -> int | None:
         nonlocal current_file
@@ -266,14 +290,16 @@ def main() -> int:
                 parts = line.split("\r")
                 last = parts[-1].strip()
                 if last:
-                    elapsed = time.time() - start_time
+                    now = time.time()
+                    elapsed = now - start_time - paused_time
                     elapsed_str = f"{int(elapsed//3600):02d}:{int((elapsed%3600)//60):02d}:{int(elapsed%60):02d}"
                     fields = last.split()
                     bytes_field = fields[0] if fields else ""
                     speed_field = fields[2] if len(fields) > 2 else ""
                     m = re.search(r'xfr#(\d+)', last)
                     xfr = m.group(1) if m else ""
-                    sys.stderr.write(f"\r{bytes_field:>12} {total_str:>12} {speed_field:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}")
+                    suffix = "  PAUSED" if paused else ""
+                    sys.stderr.write(f"\r{bytes_field:>12} {total_str:>12} {speed_field:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
                     sys.stderr.flush()
             elif line.strip() and not line.startswith("created directory"):
                 current_file = line
@@ -284,8 +310,15 @@ def main() -> int:
         t = threading.Thread(target=read_stream, args=(stream, is_err), daemon=True)
         t.start()
         threads.append(t)
+    t_pause = threading.Thread(target=pause_listener, daemon=True)
+    t_pause.start()
+    threads.append(t_pause)
     for t in threads:
         t.join()
+    pause_done.set()
+    if paused:
+        os.kill(proc.pid, signal.SIGCONT)
+        paused = False
     proc.wait()
 
     if proc.returncode != 0:
