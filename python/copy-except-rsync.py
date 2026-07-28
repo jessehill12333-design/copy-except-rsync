@@ -254,6 +254,8 @@ def main() -> int:
             print("Cancelled.")
             return 0
 
+    dest.mkdir(parents=True, exist_ok=True)
+
     cmd = build_rsync_command(source, dest, excludes, dry_run)
     print(f"\n{'DRY RUN: ' if dry_run else ''}Running: {' '.join(cmd)}")
     print()
