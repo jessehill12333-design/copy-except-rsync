@@ -77,30 +77,56 @@ def compute_total_bytes(source: Path, excludes: list[str]) -> int:
 
 
 def format_bytes(n: int) -> str:
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+    """Format a byte count with binary IEC units and no decimal SI labels."""
+    n = float(n) / 1024
+    for unit in ("KiB", "MiB", "GiB", "TiB"):
         if abs(n) < 1024:
-            return f"{n:,.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}" if unit == "KiB" else f"{n:.2f}{unit}"
+            return f"{n:.1f} {unit}" if unit == "KiB" else f"{n:.2f} {unit}"
         n /= 1024
-    return f"{n:.2f}PiB"
+    return f"{n:.2f} PiB"
+
+
+def parse_rate(value: str) -> float | None:
+    match = re.fullmatch(
+        r"([0-9]+(?:\.[0-9]+)?)(PiB|TiB|GiB|MiB|KiB|PB|TB|GB|MB|kB|P|T|G|M|K|B)/s",
+        value.strip(),
+    )
+    if not match:
+        return None
+    number = float(match.group(1))
+    unit = match.group(2)
+    multiplier = {
+        "B": 1,
+        "kB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4, "PB": 1000**5,
+        "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4, "P": 1024**5,
+        "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4, "PiB": 1024**5,
+    }.get(unit)
+    return number * multiplier if multiplier is not None else None
+
+
+def format_rate(bytes_per_second: float) -> str:
+    return f"{bytes_per_second / 1024**2:.2f} MiB/s"
 
 
 def parse_bytes(s: str) -> int | None:
     s = s.replace(",", "").strip()
     if not s:
         return None
-    if s[-1].isalpha():
-        unit = s[-1].upper()
-        num = s[:-1].strip()
-        try:
-            n = float(num)
-        except ValueError:
-            return None
-        multipliers = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4, "P": 1024**5}
-        return int(n * multipliers.get(unit, 1))
-    try:
-        return int(s)
-    except ValueError:
+    match = re.fullmatch(
+        r"([0-9]+(?:\.[0-9]+)?)(PiB|TiB|GiB|MiB|KiB|PB|TB|GB|MB|kB|P|T|G|M|K|B|bytes)?",
+        s,
+    )
+    if not match:
         return None
+    number = float(match.group(1))
+    unit = match.group(2) or "B"
+    multiplier = {
+        "B": 1, "bytes": 1,
+        "kB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4, "PB": 1000**5,
+        "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4, "P": 1024**5,
+        "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4, "PiB": 1024**5,
+    }
+    return int(number * multiplier[unit])
 
 
 def build_rsync_command(source: Path, dest: Path, excludes: list[str], dry_run: bool) -> list[str]:
@@ -294,7 +320,7 @@ def main() -> int:
     pause_start = 0.0
     paused = False
     pause_done = threading.Event()
-    print(f"{'Bytes':>12} {'Total':>12} {'Speed':>12} {'Avg':>12} {'Elapsed':>9}   {'xfr#':>4}   File", file=sys.stderr)
+    print(f"{'Size':>12} {'Total':>12} {'Speed':>12} {'Avg':>12} {'Elapsed':>9}   {'xfr#':>4}   File", file=sys.stderr)
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     current_file = ""
@@ -337,16 +363,18 @@ def main() -> int:
                         fields = last.split()
                         bytes_field = fields[0] if fields else ""
                         speed_field = fields[2] if len(fields) > 2 else ""
+                        speed_bytes = parse_rate(speed_field)
                         raw_bytes = parse_bytes(bytes_field)
                         if raw_bytes and raw_bytes > 0 and elapsed > 0:
-                            avg_str = format_bytes(int(raw_bytes / elapsed)) + "/s"
+                            avg_str = format_rate(raw_bytes / elapsed)
                         else:
                             avg_str = ""
                         m = re.search(r'xfr#(\d+)', last)
                         xfr = m.group(1) if m else ""
                         suffix = "  PAUSED" if paused else ""
                         formatted_bytes = format_bytes(raw_bytes) if raw_bytes is not None else bytes_field
-                        sys.stderr.write(f"\r{formatted_bytes:>12} {total_str:>12} {speed_field:>12} {avg_str:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
+                        formatted_speed = format_rate(speed_bytes) if speed_bytes is not None else speed_field
+                        sys.stderr.write(f"\r{formatted_bytes:>12} {total_str:>12} {formatted_speed:>12} {avg_str:>12} {elapsed_str:>9}   {xfr:>4}   {current_file}{suffix}")
                         sys.stderr.flush()
                 elif line.strip() and not line.startswith("created directory"):
                     current_file = line
